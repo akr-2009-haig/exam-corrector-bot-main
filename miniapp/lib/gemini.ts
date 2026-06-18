@@ -1,17 +1,17 @@
 /**
- * Vision client via OpenRouter (OpenAI-compatible chat completions), ported
- * from the bot's `src/gemini.ts`. Reads its config straight from the
- * environment so it can run inside the Next.js API routes.
- *
- * We POST with `response_format: { type: "json_object" }` so the model returns
- * valid JSON for our two tasks: extracting an answer key and grading.
+ * Vision client via OpenRouter (OpenAI-compatible chat completions).
+ * Reads its config from environment variables:
+ *   OPENROUTER_API_KEY      — required
+ *   OPENROUTER_MODEL        — primary model for extraction (default: google/gemini-2.5-flash-preview)
+ *   OPENROUTER_GRADING_MODEL — model for grading (falls back to OPENROUTER_MODEL)
+ *   OPENROUTER_FALLBACK_MODELS — comma-separated list of fallback models
  */
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 180_000;
 const RETRIES_PER_MODEL = 4;
 
 export type ImagePart = { type: "image_url"; image_url: { url: string } };
-export type TextPart = { type: "text"; text: string };
+export type TextPart  = { type: "text"; text: string };
 export type ContentPart = TextPart | ImagePart;
 
 export function imagePart(url: string): ImagePart {
@@ -20,13 +20,15 @@ export function imagePart(url: string): ImagePart {
 
 const apiKey = () => process.env.OPENROUTER_API_KEY || "";
 
+/** Returns true when OPENROUTER_API_KEY is present in the environment. */
+export function isConfigured(): boolean {
+  return !!apiKey();
+}
+
 export const MODELS = {
-  extraction: () => process.env.OPENROUTER_MODEL || "google/gemini-3-flash-preview",
-  grading: () =>
-    process.env.OPENROUTER_GRADING_MODEL ||
-    process.env.OPENROUTER_MODEL ||
-    "google/gemini-3-flash-preview",
-  fallbacks: () =>
+  extraction: () => process.env.OPENROUTER_MODEL         || "google/gemini-2.5-flash-preview",
+  grading:    () => process.env.OPENROUTER_GRADING_MODEL || process.env.OPENROUTER_MODEL || "google/gemini-2.5-flash-preview",
+  fallbacks:  () =>
     (process.env.OPENROUTER_FALLBACK_MODELS || "")
       .split(",")
       .map((s) => s.trim())
@@ -42,11 +44,20 @@ async function callOnce(
   systemPrompt: string,
   userParts: ContentPart[],
 ): Promise<unknown> {
+  const key = apiKey();
+  if (!key) {
+    const err = new Error(
+      "OPENROUTER_API_KEY is not set. Add it to your environment variables.",
+    );
+    (err as any).keyMissing = true;
+    throw err;
+  }
+
   const res = await fetch(ENDPOINT, {
     method: "POST",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: {
-      Authorization: `Bearer ${apiKey()}`,
+      Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
       "X-Title": "Exam Grading Mini App",
     },
@@ -54,7 +65,7 @@ async function callOnce(
       model,
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: userParts },
+        { role: "user",   content: userParts },
       ],
       temperature: 0.1,
       max_tokens: 8000,
@@ -74,7 +85,7 @@ async function callOnce(
     throw new Error(`OpenRouter error: ${JSON.stringify(data.error).slice(0, 200)}`);
   }
 
-  const raw = data?.choices?.[0]?.message?.content ?? "";
+  const raw    = data?.choices?.[0]?.message?.content ?? "";
   const parsed = extractJSON(raw);
   if (parsed === null) {
     throw new Error(`Model did not return parseable JSON (len=${String(raw).length})`);
@@ -93,6 +104,8 @@ async function tryModel(
       return await callOnce(model, systemPrompt, userParts);
     } catch (err: any) {
       lastError = err;
+      // Don't retry on missing API key — fail fast.
+      if (err?.keyMissing) throw err;
       console.warn(`[OpenRouter] ${model} attempt ${attempt}/${RETRIES_PER_MODEL}: ${short(err)}`);
       if (attempt < RETRIES_PER_MODEL) {
         await new Promise((r) => setTimeout(r, attempt * 2000));
@@ -116,6 +129,7 @@ export async function visionJSON<T = unknown>(
       return (await tryModel(model, systemPrompt, userParts)) as T;
     } catch (err: any) {
       lastError = err;
+      if (err?.keyMissing) throw err; // Propagate immediately — retrying won't help.
       if (chain.length > 1) {
         console.warn(`[OpenRouter] model ${model} failed (${short(err)}) → trying next`);
       }
@@ -129,19 +143,11 @@ export function extractJSON(raw: string): unknown {
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/```(?:json)?/gi, "")
     .trim();
-  try {
-    return JSON.parse(text);
-  } catch {
-    /* fall through */
-  }
+  try { return JSON.parse(text); } catch { /* fall through */ }
   const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
+  const end   = text.lastIndexOf("}");
   if (start !== -1 && end > start) {
-    try {
-      return JSON.parse(text.slice(start, end + 1));
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(text.slice(start, end + 1)); } catch { return null; }
   }
   return null;
 }
