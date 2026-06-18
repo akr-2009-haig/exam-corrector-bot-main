@@ -1,0 +1,22 @@
+{
+  "name": "new",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --watch index.ts",
+    "start": "bun index.ts",
+    "build": "bun build index.ts --target bun --outfile dist/index.js",
+    "start:prod": "bun dist/index.js",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3"
+  }
+}
