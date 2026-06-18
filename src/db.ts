@@ -7,7 +7,6 @@
  * open the same WAL database safely.
  */
 import { Database } from "bun:sqlite";
-import { randomUUID } from "crypto";
 
 const db = new Database("bot.db", { create: true });
 db.exec("PRAGMA journal_mode = WAL;");
@@ -55,10 +54,10 @@ export function upsertUser(
   username: string | undefined,
 ): void {
   stmts.upsertUser.run({
-    $user_id: userId,
+    $user_id:    userId,
     $first_name: firstName ?? null,
-    $username: username ?? null,
-    $now: Date.now(),
+    $username:   username ?? null,
+    $now:        Date.now(),
   });
 }
 
@@ -79,4 +78,4 @@ export function markOutboxSent(id: string): void {
   stmts.markSent.run({ $id: id, $now: Date.now() });
 }
 
-export { db, randomUUID };
+export { db };
